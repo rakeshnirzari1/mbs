@@ -185,6 +185,7 @@ test('HTTP server health endpoints return ok', async () => {
   });
 
   app.post('/mcp', async (req, res) => {
+    // Mirrors the production stateless pattern: new server/transport per request.
     const server = createServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {

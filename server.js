@@ -89,6 +89,8 @@ async function runHttp() {
   });
 
   app.post('/mcp', async (req, res) => {
+    // Stateless mode: a fresh server and transport are created per request.
+    // This matches the MCP SDK stateless pattern and avoids shared state between clients.
     const server = createServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
@@ -144,6 +146,8 @@ async function main() {
   }
 }
 
+// Only run main() when this file is the Node.js entry point, not when imported as a module
+// (e.g. by tests that import createServer).
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error('MBS MCP server failed to start:', error);
