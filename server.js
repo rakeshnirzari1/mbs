@@ -100,7 +100,7 @@ export function createServer(options = {}) {
             summaryUpdated = normalizedSummaryResult.summaryUpdated;
           }
         } catch (summaryError) {
-          logToolError('warn', 'lookup_mbs_item summary lookup', itemNumber, summaryError);
+          logToolError('warn', 'lookup_mbs_item', itemNumber, summaryError);
         }
 
         const answer = buildAnswer(item, focus ?? 'both');

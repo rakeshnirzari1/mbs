@@ -140,7 +140,7 @@ function extractBenefitAmount(benefitText) {
   }
 
   const percentageMatches = Array.from(
-    benefitText.matchAll(/(\d{1,3})%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/gi)
+    benefitText.matchAll(/(\d{1,3})%\s*=\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)/gi)
   ).map((match) => ({
     percentage: Number.parseInt(match[1], 10),
     amount: match[2]
@@ -158,7 +158,7 @@ function extractBenefitAmount(benefitText) {
     return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0].amount;
   }
 
-  const firstAmount = benefitText.match(/(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/);
+  const firstAmount = benefitText.match(/([0-9][0-9,]*(?:\.[0-9]+)?)/);
   return firstAmount?.[1]?.trim() ?? null;
 }
 
