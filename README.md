@@ -19,4 +19,8 @@ npm start
     - `focus`: `fee`, `rebate`, or `both`
 
 By default the server queries the official MBS Online item page at `https://www9.health.gov.au/mbs/fullDisplay.cfm?type=item&q=<itemNumber>`.
-You can override the endpoint with `MBS_API_BASE_URL` for local testing or alternate integrations.
+
+Optional environment variables:
+
+- `MBS_API_BASE_URL`: override the lookup endpoint for local testing or alternate integrations
+- `MBS_API_TIMEOUT_MS`: override the HTTP timeout used for MBS lookups
