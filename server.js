@@ -32,10 +32,12 @@ function normalizeOptionalSummary(summaryResult) {
   };
 }
 
-function logToolError(level, toolName, itemNumber, error) {
+function logToolError(level, toolName, itemNumber, error, failureMode = 'unexpected_error') {
   const logger = level === 'warn' ? console.warn : console.error;
   logger(`${toolName} failed`, {
     itemNumber: String(itemNumber),
+    failureMode,
+    errorType: error instanceof Error ? error.name : 'UnknownError',
     message: error instanceof Error ? error.message : 'Unknown error'
   });
 }
@@ -100,7 +102,7 @@ export function createServer(options = {}) {
             summaryUpdated = normalizedSummaryResult.summaryUpdated;
           }
         } catch (summaryError) {
-          logToolError('warn', 'lookup_mbs_item', itemNumber, summaryError);
+          logToolError('warn', 'lookup_mbs_item', itemNumber, summaryError, 'summary_feed_error');
         }
 
         const answer = buildAnswer(item, focus ?? 'both');
@@ -116,7 +118,7 @@ export function createServer(options = {}) {
           structuredContent: buildLookupStructuredContent(item, summary, summaryUpdated, fullAnswer)
         };
       } catch (error) {
-        logToolError('error', 'lookup_mbs_item', itemNumber, error);
+        logToolError('error', 'lookup_mbs_item', itemNumber, error, 'item_lookup_error');
         return {
           isError: true,
           content: [
@@ -180,7 +182,7 @@ export function createServer(options = {}) {
           }
         };
       } catch (error) {
-        logToolError('error', 'lookup_mbs_item_summary', itemNumber, error);
+        logToolError('error', 'lookup_mbs_item_summary', itemNumber, error, 'summary_lookup_error');
         return {
           isError: true,
           content: [

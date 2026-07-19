@@ -155,7 +155,7 @@ function extractBenefitAmount(benefitText) {
       }
     }
 
-    return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0].amount;
+    return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0]?.amount ?? null;
   }
 
   const firstAmount = benefitText.match(/([0-9][0-9,]*(?:\.[0-9]+)?)/);
@@ -265,6 +265,8 @@ export async function lookupMbsItem(itemNumber, options = {}) {
   const html = await response.text();
   const item = mapHtmlItem(normalizedItemNumber, html);
 
+  // Some official pages (for example incentive-style items) can expose description text
+  // even when fee/rebate rows are omitted or formatted inconsistently.
   if (item.fee === null && item.rebate === null && item.itemDescription === null) {
     throw new Error(`No MBS item was found for item number ${normalizedItemNumber}.`);
   }
