@@ -139,17 +139,23 @@ function extractBenefitAmount(benefitText) {
     return null;
   }
 
-  const explicitRates = [
-    /100%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i,
-    /85%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i,
-    /75%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i
-  ];
+  const percentageMatches = Array.from(
+    benefitText.matchAll(/(\d{1,3})%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/gi)
+  ).map((match) => ({
+    percentage: Number.parseInt(match[1], 10),
+    amount: match[2]
+  }));
 
-  for (const pattern of explicitRates) {
-    const match = benefitText.match(pattern);
-    if (match?.[1]) {
-      return match[1];
+  if (percentageMatches.length > 0) {
+    const preferredPercentages = [100, 85, 75];
+    for (const preferredPercentage of preferredPercentages) {
+      const preferredMatch = percentageMatches.find((match) => match.percentage === preferredPercentage);
+      if (preferredMatch?.amount) {
+        return preferredMatch.amount;
+      }
     }
+
+    return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0].amount;
   }
 
   const firstAmount = benefitText.match(/(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/);
