@@ -60,7 +60,7 @@ Look up an MBS item number and return the scheduled fee, Medicare rebate, and bi
   - `focus`: `fee`, `rebate`, or `both`
 - Structured output includes `itemNumber`, `fee`, `rebate`, `effectiveFrom`, `effectiveTo`, `summary` (billing compliance notes, or `null` if unavailable), `summaryUpdated`, and `answer`.
 
-When a billing compliance summary is available for the item it is appended to the answer text under the heading **Billing Compliance Summary**. If the summary feed is unavailable or contains malformed/missing summary content, the fee/rebate lookup still succeeds and summary fields are returned as `null`.
+When a billing compliance summary is available for the item it is treated as authoritative for the response text, and fee/rebate values are derived from clear currency amounts in that summary where possible. Metadata-like scraped descriptions (for example `Updated: ...`) are not used as item descriptions for summary-backed responses. If the summary feed is unavailable or contains malformed/missing summary content, the server falls back to official MBS lookup behavior and summary fields are returned as `null`.
 
 By default the server queries the official MBS Online item page at `https://www9.health.gov.au/mbs/fullDisplay.cfm?type=item&q=<itemNumber>`.
 

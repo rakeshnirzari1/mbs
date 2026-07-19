@@ -5,7 +5,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import * as z from 'zod/v4';
-import { buildAnswer, lookupMbsItem } from './src/mbs.js';
+import {
+  buildAnswer,
+  DECIMAL_AMOUNT_PATTERN_SOURCE,
+  isMetadataDescription,
+  lookupMbsItem,
+  parseCurrencyAmountText
+} from './src/mbs.js';
 import { DEFAULT_SUMMARY_DATA_URL, lookupSummaryItem } from './src/mbsSummary.js';
 
 function toNullableString(value) {
@@ -40,6 +46,43 @@ function logToolError(level, toolName, itemNumber, error, failureMode = 'unexpec
     errorType: error instanceof Error ? error.name : 'UnknownError',
     message: error instanceof Error ? error.message : 'Unknown error'
   });
+}
+
+function extractSummaryFeeAndRebate(summary) {
+  if (typeof summary !== 'string') {
+    return { fee: null, rebate: null };
+  }
+
+  const currencyPattern = `\\$\\s*${DECIMAL_AMOUNT_PATTERN_SOURCE}`;
+  const normalized = summary.replace(/\*\*/g, ' ');
+  const scheduledFee = parseCurrencyAmountText(
+    normalized.match(new RegExp(`scheduled fee[^.\\n]*${currencyPattern}`, 'i'))?.[0] ?? ''
+  );
+  const benefitAmount = parseCurrencyAmountText(
+    normalized.match(new RegExp(`benefit[^.\\n]*${currencyPattern}`, 'i'))?.[0] ?? ''
+  );
+  const hasHundredPercentBenefit = /benefit[^.\n]*100\s*%/i.test(normalized);
+
+  const fee = scheduledFee;
+  let rebate = benefitAmount;
+  if (rebate === null && hasHundredPercentBenefit && fee !== null) {
+    rebate = fee;
+  }
+
+  return { fee, rebate };
+}
+
+function normalizeSummaryBackedItem(item, summary) {
+  const { fee, rebate } = extractSummaryFeeAndRebate(summary);
+
+  return {
+    ...item,
+    itemDescription: isMetadataDescription(item.itemDescription) ? null : item.itemDescription,
+    fee: fee ?? item.fee,
+    rebate: rebate ?? item.rebate,
+    effectiveFrom: null,
+    effectiveTo: null
+  };
 }
 
 function buildLookupStructuredContent(item, summary, summaryUpdated, answer) {
@@ -90,8 +133,6 @@ export function createServer(options = {}) {
     },
     async ({ itemNumber, focus }) => {
       try {
-        const item = await lookupMbsItem(itemNumber, options);
-
         let summary = null;
         let summaryUpdated = null;
         try {
@@ -103,6 +144,34 @@ export function createServer(options = {}) {
           }
         } catch (summaryError) {
           logToolError('warn', 'lookup_mbs_item', itemNumber, summaryError, 'summary_feed_error');
+        }
+
+        let item = null;
+        let itemLookupError = null;
+        try {
+          item = await lookupMbsItem(itemNumber, options);
+        } catch (error) {
+          itemLookupError = error;
+        }
+
+        if (!item) {
+          if (!summary) {
+            throw itemLookupError ?? new Error('Unable to look up the requested MBS item.');
+          }
+
+          item = {
+            itemNumber: String(itemNumber),
+            itemName: null,
+            itemDescription: null,
+            fee: null,
+            rebate: null,
+            effectiveFrom: null,
+            effectiveTo: null
+          };
+        }
+
+        if (summary) {
+          Object.assign(item, normalizeSummaryBackedItem(item, summary));
         }
 
         const answer = buildAnswer(item, focus ?? 'both');
