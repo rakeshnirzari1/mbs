@@ -3,6 +3,13 @@ const CURRENCY_FORMATTER = new Intl.NumberFormat('en-AU', {
   style: 'currency',
   currency: 'AUD'
 });
+export const DECIMAL_AMOUNT_PATTERN_SOURCE = '[0-9][0-9,]*(?:\\.[0-9]+)?';
+const CURRENCY_AMOUNT_PATTERN = new RegExp(`\\$\\s*(${DECIMAL_AMOUNT_PATTERN_SOURCE})`);
+const STRICT_DECIMAL_AMOUNT_PATTERN = new RegExp(`^${DECIMAL_AMOUNT_PATTERN_SOURCE}$`);
+const BENEFIT_PERCENTAGE_AMOUNT_PATTERN = new RegExp(
+  `(\\d{1,3})%\\s*=\\s*\\$?\\s*(${DECIMAL_AMOUNT_PATTERN_SOURCE})`,
+  'gi'
+);
 
 function firstNonEmpty(...values) {
   for (const value of values) {
@@ -23,12 +30,26 @@ function stripMarkup(value) {
   return normalized || null;
 }
 
-function isMetadataDescription(value) {
+export function isMetadataDescription(value) {
   if (typeof value !== 'string') {
     return false;
   }
 
   return /^updated\s*:\s*\d{1,2}[-/][A-Za-z0-9]{3,}[-/]\d{2,4}$/i.test(value.trim());
+}
+
+export function parseCurrencyAmountText(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.match(CURRENCY_AMOUNT_PATTERN);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(match[1].replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function sanitizeDescription(value) {
@@ -59,17 +80,16 @@ function parseAmount(value) {
       return null;
     }
 
-    const currencyMatch = normalized.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
-    if (currencyMatch?.[1]) {
-      const parsedCurrency = Number.parseFloat(currencyMatch[1].replace(/,/g, ''));
-      return Number.isFinite(parsedCurrency) ? parsedCurrency : null;
+    const parsedCurrency = parseCurrencyAmountText(normalized);
+    if (parsedCurrency !== null) {
+      return parsedCurrency;
     }
 
     if (/%/.test(normalized)) {
       return null;
     }
 
-    if (!/^[0-9][0-9,]*(?:\.[0-9]+)?$/.test(normalized)) {
+    if (!STRICT_DECIMAL_AMOUNT_PATTERN.test(normalized)) {
       return null;
     }
 
@@ -176,18 +196,16 @@ function extractBenefitAmount(benefitText) {
     return null;
   }
 
-  const percentageMatches = Array.from(
-    benefitText.matchAll(/(\d{1,3})%\s*=\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)/gi)
-  ).map((match) => ({
+  const percentageMatches = Array.from(benefitText.matchAll(BENEFIT_PERCENTAGE_AMOUNT_PATTERN)).map((match) => ({
     percentage: Number.parseInt(match[1], 10),
-    amount: match[2]
+    amount: Number.parseFloat(match[2].replace(/,/g, ''))
   }));
 
   if (percentageMatches.length > 0) {
     const preferredPercentages = [100, 85, 75];
     for (const preferredPercentage of preferredPercentages) {
       const preferredMatch = percentageMatches.find((match) => match.percentage === preferredPercentage);
-      if (preferredMatch?.amount) {
+      if (Number.isFinite(preferredMatch?.amount)) {
         return preferredMatch.amount;
       }
     }
@@ -195,8 +213,7 @@ function extractBenefitAmount(benefitText) {
     return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0]?.amount ?? null;
   }
 
-  const firstAmount = benefitText.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
-  return firstAmount?.[1]?.trim() ?? null;
+  return parseCurrencyAmountText(benefitText);
 }
 
 function extractFirstMatchingHtmlField(html, labels, stopLabels = []) {

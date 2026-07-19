@@ -5,7 +5,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import * as z from 'zod/v4';
-import { buildAnswer, lookupMbsItem } from './src/mbs.js';
+import {
+  buildAnswer,
+  DECIMAL_AMOUNT_PATTERN_SOURCE,
+  isMetadataDescription,
+  lookupMbsItem,
+  parseCurrencyAmountText
+} from './src/mbs.js';
 import { DEFAULT_SUMMARY_DATA_URL, lookupSummaryItem } from './src/mbsSummary.js';
 
 function toNullableString(value) {
@@ -42,31 +48,18 @@ function logToolError(level, toolName, itemNumber, error, failureMode = 'unexpec
   });
 }
 
-function parseCurrencyFromText(value) {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const match = value.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
-  if (!match?.[1]) {
-    return null;
-  }
-
-  const parsed = Number.parseFloat(match[1].replace(/,/g, ''));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function extractSummaryFeeAndRebate(summary) {
   if (typeof summary !== 'string') {
     return { fee: null, rebate: null };
   }
 
+  const currencyPattern = `\\$\\s*${DECIMAL_AMOUNT_PATTERN_SOURCE}`;
   const normalized = summary.replace(/\*\*/g, ' ');
-  const scheduledFee = parseCurrencyFromText(
-    normalized.match(/scheduled fee[^.\n]*\$\s*[0-9][0-9,]*(?:\.[0-9]+)?/i)?.[0] ?? ''
+  const scheduledFee = parseCurrencyAmountText(
+    normalized.match(new RegExp(`scheduled fee[^.\\n]*${currencyPattern}`, 'i'))?.[0] ?? ''
   );
-  const benefitAmount = parseCurrencyFromText(
-    normalized.match(/benefit[^.\n]*\$\s*[0-9][0-9,]*(?:\.[0-9]+)?/i)?.[0] ?? ''
+  const benefitAmount = parseCurrencyAmountText(
+    normalized.match(new RegExp(`benefit[^.\\n]*${currencyPattern}`, 'i'))?.[0] ?? ''
   );
   const hasHundredPercentBenefit = /benefit[^.\n]*100\s*%/i.test(normalized);
 
@@ -84,10 +77,7 @@ function normalizeSummaryBackedItem(item, summary) {
 
   return {
     ...item,
-    itemDescription:
-      typeof item.itemDescription === 'string' && /^updated\s*:/i.test(item.itemDescription.trim())
-        ? null
-        : item.itemDescription,
+    itemDescription: isMetadataDescription(item.itemDescription) ? null : item.itemDescription,
     fee: fee ?? item.fee,
     rebate: rebate ?? item.rebate,
     effectiveFrom: null,
