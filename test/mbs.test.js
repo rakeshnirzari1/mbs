@@ -81,6 +81,63 @@ test('lookupMbsItem parses official-style HTML item pages', async () => {
   assert.equal(result.rebate, 45.05);
 });
 
+test('lookupMbsItem does not parse percentages as currency amounts', async () => {
+  const result = await lookupMbsItem('3', {
+    fetchImpl: async () => ({
+      ok: true,
+      headers: {
+        get(name) {
+          return name === 'content-type' ? 'text/html; charset=utf-8' : null;
+        }
+      },
+      async text() {
+        return `
+          <html>
+            <body>
+              <h1>Item 3</h1>
+              <p>Description: Level A GP attendance.</p>
+              <p>Schedule Fee: 100%</p>
+              <p>Benefit: 100%</p>
+            </body>
+          </html>
+        `;
+      }
+    })
+  });
+
+  assert.equal(result.itemDescription, 'Level A GP attendance.');
+  assert.equal(result.fee, null);
+  assert.equal(result.rebate, null);
+});
+
+test('lookupMbsItem filters metadata-only Updated descriptions', async () => {
+  const result = await lookupMbsItem('3', {
+    apiBaseUrl: 'http://127.0.0.1',
+    fetchImpl: async () => ({
+      ok: true,
+      headers: {
+        get(name) {
+          return name === 'content-type' ? 'application/json' : null;
+        }
+      },
+      async json() {
+        return {
+          mbs_items: [
+            {
+              item_number: '3',
+              item_description: 'Updated: 01-May-2010',
+              fee: 20.55,
+              rebate: 20.55
+            }
+          ]
+        };
+      }
+    })
+  });
+
+  assert.equal(result.itemDescription, null);
+});
+
 test('lookupMbsItem parses incentive-style HTML benefit formats', async () => {
   const result = await lookupMbsItem('10990', {
     fetchImpl: async () => ({
@@ -376,6 +433,79 @@ test('stdio MCP server lookup_mbs_item includes summary when available', async (
     ]);
     assert.match(result.content[0].text, /scheduled fee of \$42\.85/);
     assert.match(result.content[0].text, /Billing Compliance Summary/);
+  } finally {
+    await transport.close();
+    apiServer.close();
+    summaryServer.close();
+    await Promise.all([once(apiServer, 'close'), once(summaryServer, 'close')]);
+  }
+});
+
+test('stdio MCP server lookup_mbs_item uses summary feed as authority for item 3', async () => {
+  const apiServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(`
+      <html>
+        <body>
+          <h1>Item 3</h1>
+          <p>Description: Updated: 01-May-2010</p>
+          <p>Schedule Fee: 100%</p>
+          <p>Benefit: 100%</p>
+        </body>
+      </html>
+    `);
+  });
+
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '3': {
+          content:
+            'HEADING: MBS Item 3 Summary for Billing Compliance\n\n- The **scheduled fee** for Item 3 is **$20.55**, with a benefit of **100%**.',
+          updated: '2026-07-04'
+        }
+      })
+    );
+  });
+
+  apiServer.listen(0, '127.0.0.1');
+  summaryServer.listen(0, '127.0.0.1');
+  await Promise.all([once(apiServer, 'listening'), once(summaryServer, 'listening')]);
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_API_BASE_URL: `http://127.0.0.1:${apiServer.address().port}`,
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${summaryServer.address().port}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item',
+      arguments: { itemNumber: '3', focus: 'both' }
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.itemNumber, '3');
+    assert.equal(result.structuredContent.itemDescription, null);
+    assert.equal(result.structuredContent.fee, 20.55);
+    assert.equal(result.structuredContent.rebate, 20.55);
+    assert.equal(result.structuredContent.effectiveFrom, null);
+    assert.equal(result.structuredContent.effectiveTo, null);
+    assert.equal(result.structuredContent.summaryUpdated, '2026-07-04');
+    assert.doesNotMatch(result.content[0].text, /\$1\.00/);
+    assert.doesNotMatch(result.content[0].text, /\(Updated:/);
+    assert.match(result.content[0].text, /scheduled fee of \$20\.55/);
+    assert.match(result.content[0].text, /Medicare rebate of \$20\.55/);
   } finally {
     await transport.close();
     apiServer.close();

@@ -23,6 +23,27 @@ function stripMarkup(value) {
   return normalized || null;
 }
 
+function isMetadataDescription(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  return /^updated\s*:\s*\d{1,2}[-/][A-Za-z0-9]{3,}[-/]\d{2,4}$/i.test(value.trim());
+}
+
+function sanitizeDescription(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (!normalized || isMetadataDescription(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function parseAmount(value) {
   if (value === undefined || value === null || value === '') {
     return null;
@@ -33,12 +54,26 @@ function parseAmount(value) {
   }
 
   if (typeof value === 'string') {
-    const normalized = value.replace(/[^0-9.-]/g, '');
+    const normalized = value.trim();
     if (!normalized) {
       return null;
     }
 
-    const parsed = Number.parseFloat(normalized);
+    const currencyMatch = normalized.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
+    if (currencyMatch?.[1]) {
+      const parsedCurrency = Number.parseFloat(currencyMatch[1].replace(/,/g, ''));
+      return Number.isFinite(parsedCurrency) ? parsedCurrency : null;
+    }
+
+    if (/%/.test(normalized)) {
+      return null;
+    }
+
+    if (!/^[0-9][0-9,]*(?:\.[0-9]+)?$/.test(normalized)) {
+      return null;
+    }
+
+    const parsed = Number.parseFloat(normalized.replace(/,/g, ''));
     return Number.isFinite(parsed) ? parsed : null;
   }
 
@@ -97,12 +132,14 @@ function mapItem(item, itemNumber) {
   return {
     itemNumber,
     itemName: firstNonEmpty(item?.item_name, item?.itemName, item?.name, item?.display, item?.code?.text),
-    itemDescription: firstNonEmpty(
-      item?.item_description,
-      item?.itemDescription,
-      item?.description,
-      item?.definition,
-      stripMarkup(item?.text?.div)
+    itemDescription: sanitizeDescription(
+      firstNonEmpty(
+        item?.item_description,
+        item?.itemDescription,
+        item?.description,
+        item?.definition,
+        stripMarkup(item?.text?.div)
+      )
     ),
     fee: parseAmount(firstNonEmpty(item?.fee, item?.schedule_fee, item?.scheduleFee, item?.scheduleFeeAmount)),
     rebate: parseAmount(
@@ -158,7 +195,7 @@ function extractBenefitAmount(benefitText) {
     return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0]?.amount ?? null;
   }
 
-  const firstAmount = benefitText.match(/([0-9][0-9,]*(?:\.[0-9]+)?)/);
+  const firstAmount = benefitText.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
   return firstAmount?.[1]?.trim() ?? null;
 }
 
@@ -193,7 +230,7 @@ function mapHtmlItem(itemNumber, html) {
   return {
     itemNumber,
     itemName: null,
-    itemDescription: description,
+    itemDescription: sanitizeDescription(description),
     fee: parseAmount(feeText),
     rebate: parseAmount(extractBenefitAmount(benefitText)),
     effectiveFrom: null,
