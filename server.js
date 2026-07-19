@@ -70,8 +70,12 @@ export function createServer(options = {}) {
         let summaryUpdated = null;
         try {
           const summaryResult = await lookupSummaryItem(itemNumber, options);
-          if (summaryResult && typeof summaryResult.summary === 'string' && summaryResult.summary.trim()) {
-            summary = summaryResult.summary;
+          const normalizedSummary =
+            summaryResult && typeof summaryResult.summary === 'string'
+              ? summaryResult.summary.trim()
+              : null;
+          if (summaryResult && normalizedSummary) {
+            summary = normalizedSummary;
             summaryUpdated = summaryResult.summaryUpdated;
           }
         } catch (summaryError) {
@@ -129,8 +133,12 @@ export function createServer(options = {}) {
     async ({ itemNumber }) => {
       try {
         const summaryResult = await lookupSummaryItem(itemNumber, options);
+        const normalizedSummary =
+          summaryResult && typeof summaryResult.summary === 'string'
+            ? summaryResult.summary.trim()
+            : null;
 
-        if (!summaryResult || typeof summaryResult.summary !== 'string' || !summaryResult.summary.trim()) {
+        if (!summaryResult || !normalizedSummary) {
           return {
             isError: true,
             content: [
@@ -154,7 +162,7 @@ export function createServer(options = {}) {
           ],
           structuredContent: {
             itemNumber: String(itemNumber),
-            summary: summaryResult.summary,
+            summary: normalizedSummary,
             summaryUpdated: toNullableString(summaryResult.summaryUpdated),
             sourceUrl: String(sourceUrl)
           }
