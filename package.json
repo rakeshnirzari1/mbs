@@ -1,0 +1,30 @@
+{
+  "name": "mbs",
+  "version": "1.0.0",
+  "description": "MBS Billing Assistant for Healthcare Professionals in Australia",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "mbs-mcp-server": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "mbs",
+    "mcp",
+    "australia",
+    "healthcare"
+  ],
+  "author": "",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "http://localhost:26831/rakeshnirzari1/mbs.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
