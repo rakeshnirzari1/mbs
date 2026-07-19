@@ -18,5 +18,5 @@ npm start
     - `itemNumber`: MBS item number, for example `23`
     - `focus`: `fee`, `rebate`, or `both`
 
-By default the server queries the public MBS API at `https://mbsr_api_services.health.gov.au/v1/mbsitems`.
-You can override the endpoint with `MBS_API_BASE_URL` for local testing.
+By default the server queries the official MBS Online item page at `https://www9.health.gov.au/mbs/fullDisplay.cfm?type=item&q=<itemNumber>`.
+You can override the endpoint with `MBS_API_BASE_URL` for local testing or alternate integrations.

@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = 'https://mbsr_api_services.health.gov.au/v1/mbsitems';
+const DEFAULT_API_BASE_URL = 'https://www9.health.gov.au/mbs/fullDisplay.cfm';
 const CURRENCY_FORMATTER = new Intl.NumberFormat('en-AU', {
   style: 'currency',
   currency: 'AUD'
@@ -119,22 +119,75 @@ function mapItem(item, itemNumber) {
   };
 }
 
+function extractHtmlField(html, label, stopLabels = []) {
+  const plainText = stripMarkup(html);
+  if (!plainText) {
+    return null;
+  }
+
+  const labelPattern = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stopPattern = stopLabels.length
+    ? `(?=${stopLabels.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}|$)`
+    : '$';
+  const match = plainText.match(new RegExp(`${labelPattern}\s*:?[\\s-]*(.*?)${stopPattern}`, 'i'));
+
+  return match?.[1]?.trim() || null;
+}
+
+function extractBenefitAmount(benefitText) {
+  if (!benefitText) {
+    return null;
+  }
+
+  return benefitText.includes('=') ? benefitText.split('=').pop()?.trim() ?? null : benefitText;
+}
+
+function mapHtmlItem(itemNumber, html) {
+  const description = extractHtmlField(html, 'Description', ['Schedule Fee', 'Benefit', 'Extended Medicare Safety Net Cap']);
+  const feeText = extractHtmlField(html, 'Schedule Fee', ['Benefit', 'Extended Medicare Safety Net Cap']);
+  const benefitText = extractHtmlField(html, 'Benefit', ['Extended Medicare Safety Net Cap', 'Derived Fee']);
+
+  return {
+    itemNumber,
+    itemName: null,
+    itemDescription: description,
+    fee: parseAmount(feeText),
+    rebate: parseAmount(extractBenefitAmount(benefitText)),
+    effectiveFrom: null,
+    effectiveTo: null
+  };
+}
+
+function buildLookupUrl(apiBaseUrl, itemNumber) {
+  const url = new URL(apiBaseUrl);
+
+  if (url.pathname.endsWith('fullDisplay.cfm')) {
+    url.searchParams.set('type', 'item');
+    url.searchParams.set('q', itemNumber);
+  } else {
+    url.searchParams.set('item', itemNumber);
+  }
+
+  return url;
+}
+
 export function formatAmount(amount) {
   return amount === null ? 'not available' : CURRENCY_FORMATTER.format(amount);
 }
 
 export function buildAnswer(item, focus = 'both') {
-  const title = item.itemDescription ?? item.itemName ?? 'MBS item';
+  const descriptor = item.itemDescription ?? item.itemName;
+  const prefix = descriptor ? `MBS item ${item.itemNumber} (${descriptor})` : `MBS item ${item.itemNumber}`;
 
   if (focus === 'fee') {
-    return `MBS item ${item.itemNumber} (${title}) has a scheduled fee of ${formatAmount(item.fee)}.`;
+    return `${prefix} has a scheduled fee of ${formatAmount(item.fee)}.`;
   }
 
   if (focus === 'rebate') {
-    return `MBS item ${item.itemNumber} (${title}) has a Medicare rebate of ${formatAmount(item.rebate)}.`;
+    return `${prefix} has a Medicare rebate of ${formatAmount(item.rebate)}.`;
   }
 
-  return `MBS item ${item.itemNumber} (${title}) has a scheduled fee of ${formatAmount(item.fee)} and a Medicare rebate of ${formatAmount(item.rebate)}.`;
+  return `${prefix} has a scheduled fee of ${formatAmount(item.fee)} and a Medicare rebate of ${formatAmount(item.rebate)}.`;
 }
 
 export async function lookupMbsItem(itemNumber, options = {}) {
@@ -142,26 +195,36 @@ export async function lookupMbsItem(itemNumber, options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const apiBaseUrl = options.apiBaseUrl ?? process.env.MBS_API_BASE_URL ?? DEFAULT_API_BASE_URL;
   const timeoutMs = options.timeoutMs ?? Number.parseInt(process.env.MBS_API_TIMEOUT_MS ?? '15000', 10);
-  const url = new URL(apiBaseUrl);
-  url.searchParams.set('item', normalizedItemNumber);
-
-  const response = await fetchImpl(url, {
+  const response = await fetchImpl(buildLookupUrl(apiBaseUrl, normalizedItemNumber), {
     headers: {
-      accept: 'application/json'
+      accept: 'application/json, text/html;q=0.9'
     },
     signal: AbortSignal.timeout(timeoutMs)
   });
 
   if (!response.ok) {
-    throw new Error(`The MBS API request failed with status ${response.status}.`);
+    throw new Error(`The MBS lookup request failed with status ${response.status}.`);
   }
 
-  const payload = await response.json();
-  const item = findMatchingItem(payload, normalizedItemNumber);
+  const contentType = response.headers?.get?.('content-type') ?? '';
 
-  if (!item) {
+  if (contentType.includes('json')) {
+    const payload = await response.json();
+    const item = findMatchingItem(payload, normalizedItemNumber);
+
+    if (!item) {
+      throw new Error(`No MBS item was found for item number ${normalizedItemNumber}.`);
+    }
+
+    return mapItem(item, normalizedItemNumber);
+  }
+
+  const html = await response.text();
+  const item = mapHtmlItem(normalizedItemNumber, html);
+
+  if (item.fee === null && item.rebate === null) {
     throw new Error(`No MBS item was found for item number ${normalizedItemNumber}.`);
   }
 
-  return mapItem(item, normalizedItemNumber);
+  return item;
 }

@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { buildAnswer, lookupMbsItem, normalizeItemNumber } from '../src/mbs.js';
 
-const repoRoot = '/home/runner/work/mbs/mbs';
+const repoRoot = new URL('..', import.meta.url);
 
 test('normalizeItemNumber trims whitespace and uppercases letters', () => {
   assert.equal(normalizeItemNumber('  23a '), '23A');
@@ -14,8 +14,14 @@ test('normalizeItemNumber trims whitespace and uppercases letters', () => {
 
 test('lookupMbsItem maps MBS API item responses', async () => {
   const result = await lookupMbsItem('23', {
+    apiBaseUrl: 'http://127.0.0.1',
     fetchImpl: async () => ({
       ok: true,
+      headers: {
+        get(name) {
+          return name === 'content-type' ? 'application/json' : null;
+        }
+      },
       async json() {
         return {
           mbs_items: [
@@ -41,6 +47,36 @@ test('lookupMbsItem maps MBS API item responses', async () => {
     effectiveFrom: '2025-07-01',
     effectiveTo: null
   });
+});
+
+test('lookupMbsItem parses official-style HTML item pages', async () => {
+  const result = await lookupMbsItem('23', {
+    fetchImpl: async () => ({
+      ok: true,
+      headers: {
+        get(name) {
+          return name === 'content-type' ? 'text/html; charset=utf-8' : null;
+        }
+      },
+      async text() {
+        return `
+          <html>
+            <body>
+              <h1>Item 23</h1>
+              <p>Description: Level B GP attendance for a standard consultation.</p>
+              <p>Schedule Fee: $45.05</p>
+              <p>Benefit: 100% = $45.05</p>
+            </body>
+          </html>
+        `;
+      }
+    })
+  });
+
+  assert.equal(result.itemNumber, '23');
+  assert.equal(result.itemDescription, 'Level B GP attendance for a standard consultation.');
+  assert.equal(result.fee, 45.05);
+  assert.equal(result.rebate, 45.05);
 });
 
 test('buildAnswer can focus on the rebate', () => {
@@ -89,7 +125,7 @@ test('stdio MCP server exposes lookup_mbs_item', async () => {
   const transport = new StdioClientTransport({
     command: 'node',
     args: ['server.js'],
-    cwd: repoRoot,
+    cwd: repoRoot.pathname,
     env: {
       MBS_API_BASE_URL: `http://127.0.0.1:${address.port}`
     },
