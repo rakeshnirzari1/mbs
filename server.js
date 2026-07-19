@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import * as z from 'zod/v4';
 import { buildAnswer, lookupMbsItem } from './src/mbs.js';
 
@@ -67,13 +70,83 @@ export function createServer(options = {}) {
   return server;
 }
 
-async function main() {
+async function runStdio() {
   const transport = new StdioServerTransport();
   const server = createServer();
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error('MBS MCP server failed to start:', error);
-  process.exit(1);
-});
+async function runHttp() {
+  const port = parseInt(process.env.PORT ?? '3000', 10);
+  const app = createMcpExpressApp({ host: '0.0.0.0' });
+
+  app.get('/', (_req, res) => {
+    res.json({ status: 'ok', service: 'mbs-mcp-server' });
+  });
+
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  app.post('/mcp', async (req, res) => {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      res.on('close', () => {
+        transport.close();
+        server.close();
+      });
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null
+        });
+      }
+    }
+  });
+
+  app.get('/mcp', (_req, res) => {
+    res.status(405).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed.' },
+      id: null
+    });
+  });
+
+  app.delete('/mcp', (_req, res) => {
+    res.status(405).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed.' },
+      id: null
+    });
+  });
+
+  await new Promise((resolve, reject) => {
+    app.listen(port, '0.0.0.0', (err) => {
+      if (err) return reject(err);
+      console.log(`MBS MCP server listening on port ${port}`);
+      console.log(`MCP endpoint: http://localhost:${port}/mcp`);
+      resolve();
+    });
+  });
+}
+
+async function main() {
+  if (process.env.MCP_TRANSPORT === 'stdio') {
+    await runStdio();
+  } else {
+    await runHttp();
+  }
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('MBS MCP server failed to start:', error);
+    process.exit(1);
+  });
+}

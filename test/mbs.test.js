@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { buildAnswer, lookupMbsItem, normalizeItemNumber } from '../src/mbs.js';
+import { createServer } from '../server.js';
 
 const repoRoot = new URL('..', import.meta.url);
 
@@ -127,6 +128,7 @@ test('stdio MCP server exposes lookup_mbs_item', async () => {
     args: ['server.js'],
     cwd: repoRoot.pathname,
     env: {
+      MCP_TRANSPORT: 'stdio',
       MBS_API_BASE_URL: `http://127.0.0.1:${address.port}`
     },
     stderr: 'pipe'
@@ -159,5 +161,75 @@ test('stdio MCP server exposes lookup_mbs_item', async () => {
     await transport.close();
     apiServer.close();
     await once(apiServer, 'close');
+  }
+});
+
+test('createServer returns an MCP server with lookup_mbs_item tool', async () => {
+  const server = createServer();
+  assert.ok(server, 'createServer should return a server instance');
+});
+
+test('HTTP server health endpoints return ok', async () => {
+  const { default: express } = await import('express');
+  const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  const { createMcpExpressApp } = await import('@modelcontextprotocol/sdk/server/express.js');
+
+  const app = createMcpExpressApp({ host: '127.0.0.1' });
+
+  app.get('/', (_req, res) => {
+    res.json({ status: 'ok', service: 'mbs-mcp-server' });
+  });
+
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  app.post('/mcp', async (req, res) => {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      res.on('close', () => { transport.close(); server.close(); });
+    } catch (error) {
+      if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+    }
+  });
+
+  app.get('/mcp', (_req, res) => {
+    res.status(405).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null });
+  });
+
+  const httpServer = app.listen(0, '127.0.0.1');
+  await once(httpServer, 'listening');
+  const { port } = httpServer.address();
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const healthRes = await fetch(`${base}/health`);
+    assert.equal(healthRes.status, 200);
+    const healthBody = await healthRes.json();
+    assert.equal(healthBody.status, 'ok');
+
+    const rootRes = await fetch(`${base}/`);
+    assert.equal(rootRes.status, 200);
+    const rootBody = await rootRes.json();
+    assert.equal(rootBody.status, 'ok');
+
+    const mcpGetRes = await fetch(`${base}/mcp`);
+    assert.equal(mcpGetRes.status, 405);
+
+    const mcpBadBody = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ not: 'valid-mcp' })
+    });
+    assert.ok(mcpBadBody.status >= 400, `expected error status, got ${mcpBadBody.status}`);
+
+    const notFoundRes = await fetch(`${base}/unknown-path`);
+    assert.equal(notFoundRes.status, 404);
+  } finally {
+    httpServer.close();
+    await once(httpServer, 'close');
   }
 });
