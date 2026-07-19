@@ -139,13 +139,50 @@ function extractBenefitAmount(benefitText) {
     return null;
   }
 
-  return benefitText.includes('=') ? benefitText.split('=').pop()?.trim() ?? null : benefitText;
+  const explicitRates = [
+    /100%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /85%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i,
+    /75%\s*=\s*(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/i
+  ];
+
+  for (const pattern of explicitRates) {
+    const match = benefitText.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  const firstAmount = benefitText.match(/(\$?\s*[0-9][0-9,]*(?:\.[0-9]+)?)/);
+  return firstAmount?.[1]?.trim() ?? null;
+}
+
+function firstHtmlField(html, labels, stopLabels = []) {
+  for (const label of labels) {
+    const value = extractHtmlField(html, label, stopLabels);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
 }
 
 function mapHtmlItem(itemNumber, html) {
-  const description = extractHtmlField(html, 'Description', ['Schedule Fee', 'Benefit', 'Extended Medicare Safety Net Cap']);
-  const feeText = extractHtmlField(html, 'Schedule Fee', ['Benefit', 'Extended Medicare Safety Net Cap']);
-  const benefitText = extractHtmlField(html, 'Benefit', ['Extended Medicare Safety Net Cap', 'Derived Fee']);
+  const description = firstHtmlField(
+    html,
+    ['Description', 'Descriptor'],
+    ['Schedule Fee', 'Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
+  );
+  const feeText = firstHtmlField(
+    html,
+    ['Schedule Fee', 'Fee'],
+    ['Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
+  );
+  const benefitText = firstHtmlField(
+    html,
+    ['Benefit', 'Benefits', 'Medicare Benefit'],
+    ['Extended Medicare Safety Net Cap', 'Derived Fee']
+  );
 
   return {
     itemNumber,
@@ -222,7 +259,7 @@ export async function lookupMbsItem(itemNumber, options = {}) {
   const html = await response.text();
   const item = mapHtmlItem(normalizedItemNumber, html);
 
-  if (item.fee === null && item.rebate === null) {
+  if (item.fee === null && item.rebate === null && item.itemDescription === null) {
     throw new Error(`No MBS item was found for item number ${normalizedItemNumber}.`);
   }
 
