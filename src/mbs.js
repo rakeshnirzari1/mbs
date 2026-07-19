@@ -129,7 +129,7 @@ function extractHtmlField(html, label, stopLabels = []) {
   const stopPattern = stopLabels.length
     ? `(?=${stopLabels.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}|$)`
     : '$';
-  const match = plainText.match(new RegExp(`${labelPattern}\s*:?[\\s-]*(.*?)${stopPattern}`, 'i'));
+  const match = plainText.match(new RegExp(`${labelPattern}\\s*:?[\\s-]*(.*?)${stopPattern}`, 'i'));
 
   return match?.[1]?.trim() || null;
 }
