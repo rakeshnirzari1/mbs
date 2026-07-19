@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { buildAnswer, lookupMbsItem, normalizeItemNumber } from '../src/mbs.js';
+import { lookupSummaryItem } from '../src/mbsSummary.js';
 import { createServer } from '../server.js';
 
 const repoRoot = new URL('..', import.meta.url);
@@ -232,5 +233,257 @@ test('HTTP server health endpoints return ok', async () => {
   } finally {
     httpServer.close();
     await once(httpServer, 'close');
+  }
+});
+
+test('lookupSummaryItem returns summary for known item', async () => {
+  const result = await lookupSummaryItem('23', {
+    summaryDataUrl: 'http://unused.test',
+    summaryCacheTtlMs: 0,
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          '23': { content: 'Billing compliance summary for item 23.', updated: '2026-07-04' }
+        };
+      }
+    })
+  });
+
+  assert.deepEqual(result, {
+    summary: 'Billing compliance summary for item 23.',
+    summaryUpdated: '2026-07-04'
+  });
+});
+
+test('lookupSummaryItem returns null for unknown item', async () => {
+  const result = await lookupSummaryItem('999', {
+    summaryDataUrl: 'http://unused.test',
+    summaryCacheTtlMs: 0,
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          '23': { content: 'Billing compliance summary for item 23.', updated: '2026-07-04' }
+        };
+      }
+    })
+  });
+
+  assert.equal(result, null);
+});
+
+test('stdio MCP server lookup_mbs_item includes summary when available', async () => {
+  const apiServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        mbs_items: [
+          {
+            item_number: '23',
+            item_name: 'Professional attendance',
+            item_description: 'Level B GP attendance',
+            fee: 42.85,
+            rebate: 41.4,
+            effective_from: '2025-07-01'
+          }
+        ]
+      })
+    );
+  });
+
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '23': { content: 'Billing compliance summary for item 23.', updated: '2026-07-04' }
+      })
+    );
+  });
+
+  apiServer.listen(0, '127.0.0.1');
+  summaryServer.listen(0, '127.0.0.1');
+  await Promise.all([once(apiServer, 'listening'), once(summaryServer, 'listening')]);
+
+  const apiPort = apiServer.address().port;
+  const summaryPort = summaryServer.address().port;
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${summaryPort}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item',
+      arguments: { itemNumber: '23', focus: 'both' }
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.fee, 42.85);
+    assert.equal(result.structuredContent.summary, 'Billing compliance summary for item 23.');
+    assert.equal(result.structuredContent.summaryUpdated, '2026-07-04');
+    assert.match(result.content[0].text, /scheduled fee of \$42\.85/);
+    assert.match(result.content[0].text, /Billing Compliance Summary/);
+  } finally {
+    await transport.close();
+    apiServer.close();
+    summaryServer.close();
+    await Promise.all([once(apiServer, 'close'), once(summaryServer, 'close')]);
+  }
+});
+
+test('stdio MCP server lookup_mbs_item succeeds when summary feed unavailable', async () => {
+  const apiServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        mbs_items: [{ item_number: '23', fee: 42.85, rebate: 41.4 }]
+      })
+    );
+  });
+
+  // Summary server that always returns 503 to simulate unavailability.
+  const unavailableSummaryServer = http.createServer((_request, response) => {
+    response.writeHead(503);
+    response.end();
+  });
+
+  apiServer.listen(0, '127.0.0.1');
+  unavailableSummaryServer.listen(0, '127.0.0.1');
+  await Promise.all([once(apiServer, 'listening'), once(unavailableSummaryServer, 'listening')]);
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_API_BASE_URL: `http://127.0.0.1:${apiServer.address().port}`,
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${unavailableSummaryServer.address().port}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item',
+      arguments: { itemNumber: '23' }
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.fee, 42.85);
+    assert.equal(result.structuredContent.rebate, 41.4);
+    assert.equal(result.structuredContent.summary, null);
+  } finally {
+    await transport.close();
+    apiServer.close();
+    unavailableSummaryServer.close();
+    await Promise.all([once(apiServer, 'close'), once(unavailableSummaryServer, 'close')]);
+  }
+});
+
+test('stdio MCP server lookup_mbs_item_summary returns data for known item', async () => {
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '23': { content: 'Billing compliance summary for item 23.', updated: '2026-07-04' }
+      })
+    );
+  });
+
+  summaryServer.listen(0, '127.0.0.1');
+  await once(summaryServer, 'listening');
+
+  const summaryUrl = `http://127.0.0.1:${summaryServer.address().port}`;
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_SUMMARY_DATA_URL: summaryUrl
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const tools = await client.listTools();
+    assert.ok(tools.tools.some((tool) => tool.name === 'lookup_mbs_item_summary'));
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item_summary',
+      arguments: { itemNumber: '23' }
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.itemNumber, '23');
+    assert.equal(result.structuredContent.summary, 'Billing compliance summary for item 23.');
+    assert.equal(result.structuredContent.summaryUpdated, '2026-07-04');
+    assert.equal(result.structuredContent.sourceUrl, summaryUrl);
+  } finally {
+    await transport.close();
+    summaryServer.close();
+    await once(summaryServer, 'close');
+  }
+});
+
+test('stdio MCP server lookup_mbs_item_summary returns error for unknown item', async () => {
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '23': { content: 'Billing compliance summary for item 23.', updated: '2026-07-04' }
+      })
+    );
+  });
+
+  summaryServer.listen(0, '127.0.0.1');
+  await once(summaryServer, 'listening');
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${summaryServer.address().port}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item_summary',
+      arguments: { itemNumber: '999' }
+    });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /No billing compliance summary was found/);
+  } finally {
+    await transport.close();
+    summaryServer.close();
+    await once(summaryServer, 'close');
   }
 });

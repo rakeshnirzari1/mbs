@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import * as z from 'zod/v4';
 import { buildAnswer, lookupMbsItem } from './src/mbs.js';
+import { DEFAULT_SUMMARY_DATA_URL, lookupSummaryItem } from './src/mbsSummary.js';
 
 export function createServer(options = {}) {
   const server = new McpServer({
@@ -33,24 +34,42 @@ export function createServer(options = {}) {
         rebate: z.number().nullable(),
         effectiveFrom: z.string().nullable(),
         effectiveTo: z.string().nullable(),
+        summary: z.string().nullable(),
+        summaryUpdated: z.string().nullable(),
         answer: z.string()
       }
     },
     async ({ itemNumber, focus }) => {
       try {
         const item = await lookupMbsItem(itemNumber, options);
+
+        let summary = null;
+        let summaryUpdated = null;
+        try {
+          const summaryResult = await lookupSummaryItem(itemNumber, options);
+          if (summaryResult) {
+            summary = summaryResult.summary;
+            summaryUpdated = summaryResult.summaryUpdated;
+          }
+        } catch {
+          // Summary feed is unavailable; continue without it.
+        }
+
         const answer = buildAnswer(item, focus ?? 'both');
+        const fullAnswer = summary ? `${answer}\n\nBilling Compliance Summary:\n${summary}` : answer;
 
         return {
           content: [
             {
               type: 'text',
-              text: answer
+              text: fullAnswer
             }
           ],
           structuredContent: {
             ...item,
-            answer
+            summary,
+            summaryUpdated,
+            answer: fullAnswer
           }
         };
       } catch (error) {
@@ -60,6 +79,71 @@ export function createServer(options = {}) {
             {
               type: 'text',
               text: error instanceof Error ? error.message : 'Unable to look up the requested MBS item.'
+            }
+          ]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    'lookup_mbs_item_summary',
+    {
+      description:
+        'Look up the billing compliance summary for an Australian Medicare Benefits Schedule item number.',
+      inputSchema: {
+        itemNumber: z.string().describe('The MBS item number to look up, such as 23.')
+      },
+      outputSchema: {
+        itemNumber: z.string(),
+        summary: z.string(),
+        summaryUpdated: z.string().nullable(),
+        sourceUrl: z.string()
+      }
+    },
+    async ({ itemNumber }) => {
+      try {
+        const summaryResult = await lookupSummaryItem(itemNumber, options);
+
+        if (!summaryResult) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `No billing compliance summary was found for MBS item ${itemNumber}.`
+              }
+            ]
+          };
+        }
+
+        const sourceUrl =
+          options.summaryDataUrl ?? process.env.MBS_SUMMARY_DATA_URL ?? DEFAULT_SUMMARY_DATA_URL;
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: summaryResult.summary
+            }
+          ],
+          structuredContent: {
+            itemNumber: String(itemNumber),
+            summary: summaryResult.summary,
+            summaryUpdated: summaryResult.summaryUpdated,
+            sourceUrl
+          }
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text:
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to look up the billing compliance summary.'
             }
           ]
         };
