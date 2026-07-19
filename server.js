@@ -16,6 +16,30 @@ function toNullableNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function normalizeOptionalSummary(summaryResult) {
+  if (!summaryResult || typeof summaryResult.summary !== 'string') {
+    return null;
+  }
+
+  const normalizedSummary = summaryResult.summary.trim();
+  if (!normalizedSummary) {
+    return null;
+  }
+
+  return {
+    summary: normalizedSummary,
+    summaryUpdated: summaryResult.summaryUpdated
+  };
+}
+
+function logToolError(level, toolName, itemNumber, error) {
+  const logger = level === 'warn' ? console.warn : console.error;
+  logger(`${toolName} failed`, {
+    itemNumber: String(itemNumber),
+    message: error instanceof Error ? error.message : 'Unknown error'
+  });
+}
+
 function buildLookupStructuredContent(item, summary, summaryUpdated, answer) {
   return {
     itemNumber: String(item.itemNumber),
@@ -70,19 +94,13 @@ export function createServer(options = {}) {
         let summaryUpdated = null;
         try {
           const summaryResult = await lookupSummaryItem(itemNumber, options);
-          const normalizedSummary =
-            summaryResult && typeof summaryResult.summary === 'string'
-              ? summaryResult.summary.trim()
-              : null;
-          if (summaryResult && normalizedSummary) {
-            summary = normalizedSummary;
-            summaryUpdated = summaryResult.summaryUpdated;
+          const normalizedSummaryResult = normalizeOptionalSummary(summaryResult);
+          if (normalizedSummaryResult) {
+            summary = normalizedSummaryResult.summary;
+            summaryUpdated = normalizedSummaryResult.summaryUpdated;
           }
         } catch (summaryError) {
-          console.warn('Summary lookup failed for lookup_mbs_item', {
-            itemNumber: String(itemNumber),
-            message: summaryError instanceof Error ? summaryError.message : 'Unknown summary lookup error'
-          });
+          logToolError('warn', 'lookup_mbs_item summary lookup', itemNumber, summaryError);
         }
 
         const answer = buildAnswer(item, focus ?? 'both');
@@ -98,10 +116,7 @@ export function createServer(options = {}) {
           structuredContent: buildLookupStructuredContent(item, summary, summaryUpdated, fullAnswer)
         };
       } catch (error) {
-        console.error('MBS lookup failed for lookup_mbs_item', {
-          itemNumber: String(itemNumber),
-          message: error instanceof Error ? error.message : 'Unknown lookup error'
-        });
+        logToolError('error', 'lookup_mbs_item', itemNumber, error);
         return {
           isError: true,
           content: [
@@ -133,12 +148,9 @@ export function createServer(options = {}) {
     async ({ itemNumber }) => {
       try {
         const summaryResult = await lookupSummaryItem(itemNumber, options);
-        const normalizedSummary =
-          summaryResult && typeof summaryResult.summary === 'string'
-            ? summaryResult.summary.trim()
-            : null;
+        const normalizedSummaryResult = normalizeOptionalSummary(summaryResult);
 
-        if (!summaryResult || !normalizedSummary) {
+        if (!normalizedSummaryResult) {
           return {
             isError: true,
             content: [
@@ -162,16 +174,13 @@ export function createServer(options = {}) {
           ],
           structuredContent: {
             itemNumber: String(itemNumber),
-            summary: normalizedSummary,
-            summaryUpdated: toNullableString(summaryResult.summaryUpdated),
+            summary: normalizedSummaryResult.summary,
+            summaryUpdated: toNullableString(normalizedSummaryResult.summaryUpdated),
             sourceUrl: String(sourceUrl)
           }
         };
       } catch (error) {
-        console.error('Summary lookup failed for lookup_mbs_item_summary', {
-          itemNumber: String(itemNumber),
-          message: error instanceof Error ? error.message : 'Unknown summary lookup error'
-        });
+        logToolError('error', 'lookup_mbs_item_summary', itemNumber, error);
         return {
           isError: true,
           content: [

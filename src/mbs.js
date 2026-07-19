@@ -162,7 +162,7 @@ function extractBenefitAmount(benefitText) {
   return firstAmount?.[1]?.trim() ?? null;
 }
 
-function firstHtmlField(html, labels, stopLabels = []) {
+function extractFirstMatchingHtmlField(html, labels, stopLabels = []) {
   for (const label of labels) {
     const value = extractHtmlField(html, label, stopLabels);
     if (value) {
@@ -174,17 +174,17 @@ function firstHtmlField(html, labels, stopLabels = []) {
 }
 
 function mapHtmlItem(itemNumber, html) {
-  const description = firstHtmlField(
+  const description = extractFirstMatchingHtmlField(
     html,
     ['Description', 'Descriptor'],
     ['Schedule Fee', 'Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
   );
-  const feeText = firstHtmlField(
+  const feeText = extractFirstMatchingHtmlField(
     html,
     ['Schedule Fee', 'Fee'],
     ['Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
   );
-  const benefitText = firstHtmlField(
+  const benefitText = extractFirstMatchingHtmlField(
     html,
     ['Benefit', 'Benefits', 'Medicare Benefit'],
     ['Extended Medicare Safety Net Cap', 'Derived Fee']
