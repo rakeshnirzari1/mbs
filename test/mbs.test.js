@@ -81,6 +81,35 @@ test('lookupMbsItem parses official-style HTML item pages', async () => {
   assert.equal(result.rebate, 45.05);
 });
 
+test('lookupMbsItem parses incentive-style HTML benefit formats', async () => {
+  const result = await lookupMbsItem('10990', {
+    fetchImpl: async () => ({
+      ok: true,
+      headers: {
+        get(name) {
+          return name === 'content-type' ? 'text/html; charset=utf-8' : null;
+        }
+      },
+      async text() {
+        return `
+          <html>
+            <body>
+              <h1>Item 10990</h1>
+              <p>Description: Bulk billing incentive for eligible services.</p>
+              <p>Benefits: 100% = $9.85 85% = $8.37</p>
+            </body>
+          </html>
+        `;
+      }
+    })
+  });
+
+  assert.equal(result.itemNumber, '10990');
+  assert.equal(result.itemDescription, 'Bulk billing incentive for eligible services.');
+  assert.equal(result.fee, null);
+  assert.equal(result.rebate, 9.85);
+});
+
 test('buildAnswer can focus on the rebate', () => {
   const answer = buildAnswer(
     {
@@ -333,6 +362,18 @@ test('stdio MCP server lookup_mbs_item includes summary when available', async (
     assert.equal(result.structuredContent.fee, 42.85);
     assert.equal(result.structuredContent.summary, 'Billing compliance summary for item 23.');
     assert.equal(result.structuredContent.summaryUpdated, '2026-07-04');
+    assert.deepEqual(Object.keys(result.structuredContent).sort(), [
+      'answer',
+      'effectiveFrom',
+      'effectiveTo',
+      'fee',
+      'itemDescription',
+      'itemName',
+      'itemNumber',
+      'rebate',
+      'summary',
+      'summaryUpdated'
+    ]);
     assert.match(result.content[0].text, /scheduled fee of \$42\.85/);
     assert.match(result.content[0].text, /Billing Compliance Summary/);
   } finally {
@@ -388,11 +429,67 @@ test('stdio MCP server lookup_mbs_item succeeds when summary feed unavailable', 
     assert.equal(result.structuredContent.fee, 42.85);
     assert.equal(result.structuredContent.rebate, 41.4);
     assert.equal(result.structuredContent.summary, null);
+    assert.equal(result.structuredContent.summaryUpdated, null);
   } finally {
     await transport.close();
     apiServer.close();
     unavailableSummaryServer.close();
     await Promise.all([once(apiServer, 'close'), once(unavailableSummaryServer, 'close')]);
+  }
+});
+
+test('stdio MCP server lookup_mbs_item ignores malformed summary feed entries', async () => {
+  const apiServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        mbs_items: [{ item_number: '23', fee: 42.85, rebate: 41.4 }]
+      })
+    );
+  });
+
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '23': { updated: '2026-07-04' }
+      })
+    );
+  });
+
+  apiServer.listen(0, '127.0.0.1');
+  summaryServer.listen(0, '127.0.0.1');
+  await Promise.all([once(apiServer, 'listening'), once(summaryServer, 'listening')]);
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_API_BASE_URL: `http://127.0.0.1:${apiServer.address().port}`,
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${summaryServer.address().port}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item',
+      arguments: { itemNumber: '23' }
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.summary, null);
+    assert.equal(result.structuredContent.summaryUpdated, null);
+  } finally {
+    await transport.close();
+    apiServer.close();
+    summaryServer.close();
+    await Promise.all([once(apiServer, 'close'), once(summaryServer, 'close')]);
   }
 });
 
@@ -480,7 +577,49 @@ test('stdio MCP server lookup_mbs_item_summary returns error for unknown item', 
     });
 
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /No billing compliance summary was found/);
+    assert.match(result.content[0].text, /No billing compliance summary content was found/);
+  } finally {
+    await transport.close();
+    summaryServer.close();
+    await once(summaryServer, 'close');
+  }
+});
+
+test('stdio MCP server lookup_mbs_item_summary returns error for malformed summary entry', async () => {
+  const summaryServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        '23': { updated: '2026-07-04' }
+      })
+    );
+  });
+
+  summaryServer.listen(0, '127.0.0.1');
+  await once(summaryServer, 'listening');
+
+  const transport = new StdioClientTransport({
+    command: 'node',
+    args: ['server.js'],
+    cwd: repoRoot.pathname,
+    env: {
+      MCP_TRANSPORT: 'stdio',
+      MBS_SUMMARY_DATA_URL: `http://127.0.0.1:${summaryServer.address().port}`
+    },
+    stderr: 'pipe'
+  });
+  const client = new Client({ name: 'mbs-test-client', version: '1.0.0' });
+
+  try {
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'lookup_mbs_item_summary',
+      arguments: { itemNumber: '23' }
+    });
+
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /No billing compliance summary content was found/);
   } finally {
     await transport.close();
     summaryServer.close();

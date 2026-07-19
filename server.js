@@ -8,6 +8,55 @@ import * as z from 'zod/v4';
 import { buildAnswer, lookupMbsItem } from './src/mbs.js';
 import { DEFAULT_SUMMARY_DATA_URL, lookupSummaryItem } from './src/mbsSummary.js';
 
+function toNullableString(value) {
+  return typeof value === 'string' ? value : null;
+}
+
+function toNullableNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeOptionalSummary(summaryResult) {
+  if (!summaryResult || typeof summaryResult.summary !== 'string') {
+    return null;
+  }
+
+  const normalizedSummary = summaryResult.summary.trim();
+  if (!normalizedSummary) {
+    return null;
+  }
+
+  return {
+    summary: normalizedSummary,
+    summaryUpdated: summaryResult.summaryUpdated
+  };
+}
+
+function logToolError(level, toolName, itemNumber, error, failureMode = 'unexpected_error') {
+  const logger = level === 'warn' ? console.warn : console.error;
+  logger(`${toolName} failed`, {
+    itemNumber: String(itemNumber),
+    failureMode,
+    errorType: error instanceof Error ? error.name : 'UnknownError',
+    message: error instanceof Error ? error.message : 'Unknown error'
+  });
+}
+
+function buildLookupStructuredContent(item, summary, summaryUpdated, answer) {
+  return {
+    itemNumber: String(item.itemNumber),
+    itemName: toNullableString(item.itemName),
+    itemDescription: toNullableString(item.itemDescription),
+    fee: toNullableNumber(item.fee),
+    rebate: toNullableNumber(item.rebate),
+    effectiveFrom: toNullableString(item.effectiveFrom),
+    effectiveTo: toNullableString(item.effectiveTo),
+    summary: toNullableString(summary),
+    summaryUpdated: toNullableString(summaryUpdated),
+    answer: String(answer)
+  };
+}
+
 export function createServer(options = {}) {
   const server = new McpServer({
     name: 'mbs-billing-assistant',
@@ -47,12 +96,13 @@ export function createServer(options = {}) {
         let summaryUpdated = null;
         try {
           const summaryResult = await lookupSummaryItem(itemNumber, options);
-          if (summaryResult) {
-            summary = summaryResult.summary;
-            summaryUpdated = summaryResult.summaryUpdated;
+          const normalizedSummaryResult = normalizeOptionalSummary(summaryResult);
+          if (normalizedSummaryResult) {
+            summary = normalizedSummaryResult.summary;
+            summaryUpdated = normalizedSummaryResult.summaryUpdated;
           }
-        } catch {
-          // Summary feed is unavailable; continue without it.
+        } catch (summaryError) {
+          logToolError('warn', 'lookup_mbs_item', itemNumber, summaryError, 'summary_feed_error');
         }
 
         const answer = buildAnswer(item, focus ?? 'both');
@@ -65,14 +115,10 @@ export function createServer(options = {}) {
               text: fullAnswer
             }
           ],
-          structuredContent: {
-            ...item,
-            summary,
-            summaryUpdated,
-            answer: fullAnswer
-          }
+          structuredContent: buildLookupStructuredContent(item, summary, summaryUpdated, fullAnswer)
         };
       } catch (error) {
+        logToolError('error', 'lookup_mbs_item', itemNumber, error, 'item_lookup_error');
         return {
           isError: true,
           content: [
@@ -104,14 +150,15 @@ export function createServer(options = {}) {
     async ({ itemNumber }) => {
       try {
         const summaryResult = await lookupSummaryItem(itemNumber, options);
+        const normalizedSummaryResult = normalizeOptionalSummary(summaryResult);
 
-        if (!summaryResult) {
+        if (!normalizedSummaryResult) {
           return {
             isError: true,
             content: [
               {
                 type: 'text',
-                text: `No billing compliance summary was found for MBS item ${itemNumber}.`
+                text: `No billing compliance summary content was found for MBS item ${itemNumber}.`
               }
             ]
           };
@@ -129,12 +176,13 @@ export function createServer(options = {}) {
           ],
           structuredContent: {
             itemNumber: String(itemNumber),
-            summary: summaryResult.summary,
-            summaryUpdated: summaryResult.summaryUpdated,
-            sourceUrl
+            summary: normalizedSummaryResult.summary,
+            summaryUpdated: toNullableString(normalizedSummaryResult.summaryUpdated),
+            sourceUrl: String(sourceUrl)
           }
         };
       } catch (error) {
+        logToolError('error', 'lookup_mbs_item_summary', itemNumber, error, 'summary_lookup_error');
         return {
           isError: true,
           content: [

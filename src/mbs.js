@@ -139,13 +139,56 @@ function extractBenefitAmount(benefitText) {
     return null;
   }
 
-  return benefitText.includes('=') ? benefitText.split('=').pop()?.trim() ?? null : benefitText;
+  const percentageMatches = Array.from(
+    benefitText.matchAll(/(\d{1,3})%\s*=\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)/gi)
+  ).map((match) => ({
+    percentage: Number.parseInt(match[1], 10),
+    amount: match[2]
+  }));
+
+  if (percentageMatches.length > 0) {
+    const preferredPercentages = [100, 85, 75];
+    for (const preferredPercentage of preferredPercentages) {
+      const preferredMatch = percentageMatches.find((match) => match.percentage === preferredPercentage);
+      if (preferredMatch?.amount) {
+        return preferredMatch.amount;
+      }
+    }
+
+    return percentageMatches.sort((a, b) => b.percentage - a.percentage)[0]?.amount ?? null;
+  }
+
+  const firstAmount = benefitText.match(/([0-9][0-9,]*(?:\.[0-9]+)?)/);
+  return firstAmount?.[1]?.trim() ?? null;
+}
+
+function extractFirstMatchingHtmlField(html, labels, stopLabels = []) {
+  for (const label of labels) {
+    const value = extractHtmlField(html, label, stopLabels);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
 }
 
 function mapHtmlItem(itemNumber, html) {
-  const description = extractHtmlField(html, 'Description', ['Schedule Fee', 'Benefit', 'Extended Medicare Safety Net Cap']);
-  const feeText = extractHtmlField(html, 'Schedule Fee', ['Benefit', 'Extended Medicare Safety Net Cap']);
-  const benefitText = extractHtmlField(html, 'Benefit', ['Extended Medicare Safety Net Cap', 'Derived Fee']);
+  const description = extractFirstMatchingHtmlField(
+    html,
+    ['Description', 'Descriptor'],
+    ['Schedule Fee', 'Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
+  );
+  const feeText = extractFirstMatchingHtmlField(
+    html,
+    ['Schedule Fee', 'Fee'],
+    ['Benefit', 'Benefits', 'Extended Medicare Safety Net Cap']
+  );
+  const benefitText = extractFirstMatchingHtmlField(
+    html,
+    ['Benefit', 'Benefits', 'Medicare Benefit'],
+    ['Extended Medicare Safety Net Cap', 'Derived Fee']
+  );
 
   return {
     itemNumber,
@@ -222,7 +265,9 @@ export async function lookupMbsItem(itemNumber, options = {}) {
   const html = await response.text();
   const item = mapHtmlItem(normalizedItemNumber, html);
 
-  if (item.fee === null && item.rebate === null) {
+  // Some official pages (for example incentive-style items) can expose description text
+  // even when fee/rebate rows are omitted or formatted inconsistently.
+  if (item.fee === null && item.rebate === null && item.itemDescription === null) {
     throw new Error(`No MBS item was found for item number ${normalizedItemNumber}.`);
   }
 
